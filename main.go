@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -25,6 +25,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Problem", err)
 	}
+	// Possibly seek here?
 	name, err := NameAt(r, offset)
 	if err != nil {
 		log.Fatal("Problem", err)
@@ -34,17 +35,15 @@ func main() {
 
 }
 
-func NameAt(r io.Reader, offset int) (string, error) {
+func NameAt(r io.Reader, off int) (string, error) {
 	var name bytes.Buffer
 	root := byte(0x00)
-	buf := bufio.NewReader(r)
-	n, err := buf.Discard(offset)
-	if n != offset {
-		return "", fmt.Errorf("Discard problem : %d", n)
-	}
+	all, err := ioutil.ReadAll(r)
 	if err != nil {
 		return "", err
 	}
+	buf := bytes.NewReader(all)
+	buf.Seek(int64(off), 0)
 
 	lengthHeader, err := buf.ReadByte()
 	if err != nil {
@@ -53,15 +52,32 @@ func NameAt(r io.Reader, offset int) (string, error) {
 
 	fmt.Println("LenghtHeader:", lengthHeader)
 
+	count := 0
 	for lengthHeader != root {
-		readTo, isPointer := FetchOffset(int(lengthHeader))
+		if count > 10 {
+			return "Probelm", fmt.Errorf("Problem with somethign")
+		}
+		isPointer := FetchOffset(int(lengthHeader))
 		if isPointer {
-			fmt.Println("Pointer!")
-		} else {
-			fmt.Println("Not a pointer. Offset", readTo)
+			offset, err := buf.ReadByte()
+			if err != nil {
+				return "", err
+			}
+			fmt.Println("Pointer! Readto:", offset)
+			// buf.Reset(all)
+			buf.Seek(int64(offset), 0)
+			if err != nil {
+				return "", err
+			}
+			lengthHeader, err = buf.ReadByte()
+			if err != nil {
+				return "", err
+			}
+			count++
+			continue
 		}
 
-		buffer := make([]byte, readTo)
+		buffer := make([]byte, lengthHeader)
 		_, err := io.ReadFull(buf, buffer)
 		// if n != readTo {
 		// 	return "", fmt.Errorf("Something went wrong : %d", n)
@@ -71,6 +87,7 @@ func NameAt(r io.Reader, offset int) (string, error) {
 		}
 		fmt.Println("Buffer", buffer)
 		name.Write(buffer)
+		name.WriteString(".") // how do we not do this on the last call
 		fmt.Println("Buffer", string(buffer))
 		lengthHeader, err = buf.ReadByte()
 		if err != nil {
@@ -80,12 +97,7 @@ func NameAt(r io.Reader, offset int) (string, error) {
 	return name.String(), nil
 }
 
-func FetchOffset(b int) (offset int, isPointer bool) {
+func FetchOffset(b int) bool {
 	pointerMask := 0xC0
-	pointerSet := (b & pointerMask) == pointerMask // clear 6 lowest bits, check what's left is the mask
-	if !pointerSet {
-		return b, false
-	}
-
-	return (b ^ pointerMask), true
+	return (b & pointerMask) == pointerMask
 }
